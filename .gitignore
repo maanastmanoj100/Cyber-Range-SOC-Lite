@@ -14,6 +14,11 @@ dist/
 .vscode/
 .idea/
 
+# Logs
+logs/*
+!logs/.gitkeep
+!logs/README.md
+
 # OS
 .DS_Store
 Thumbs.db
