@@ -1,0 +1,145 @@
+# ─────────────────────────────────────────────────────────────
+#  Cyber Range SOC Lite  —  Docker Compose
+# ─────────────────────────────────────────────────────────────
+#  Core services:  target-app, log-collector, attacker
+#  Dashboard:      backend, frontend, detection-engine, explainer
+# ─────────────────────────────────────────────────────────────
+
+name: cyber-range-soc-lite
+
+networks:
+  soc-network:
+    driver: bridge
+
+volumes:
+  uploads:
+  log_data:
+  alert_data:
+  soc_data:
+
+
+# ── Core Services ───────────────────────────────────────────
+
+services:
+
+  # ---- Target web app (vulnerable FastAPI) ----
+  target-app:
+    build:
+      context: ./vulnerable-app
+      dockerfile: Dockerfile
+    container_name: soc-target
+    ports:
+      - "${TARGET_PORT:-8001}:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - LOG_COLLECTOR_URL=http://log-collector:8000/log
+    volumes:
+      - uploads:/app/uploads
+    networks:
+      - soc-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; exit(0 if urllib.request.urlopen('http://localhost:8000/health').status == 200 else 1)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  # ---- Log Collector + storage ----
+  log-collector:
+    build:
+      context: ./log-collector
+      dockerfile: Dockerfile
+    container_name: soc-log-collector
+    ports:
+      - "${LOG_COLLECTOR_PORT:-8002}:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - log_data:/app
+    networks:
+      - soc-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; exit(0 if urllib.request.urlopen('http://localhost:8000/health').status == 200 else 1)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  # ---- Attacker (runs on demand via docker compose run) ----
+  attacker:
+    build:
+      context: ./attack-simulator
+      dockerfile: Dockerfile
+    container_name: soc-attacker
+    profiles: ["attack"]
+    environment:
+      - PYTHONUNBUFFERED=1
+    networks:
+      - soc-network
+    # Default command — override via `docker compose run attacker ...args`
+    command: ["--target", "http://target-app:8000", "--attack", "all", "--attempts", "20", "--delay", "0.5"]
+
+
+# ── SOC Dashboard (optional) ────────────────────────────────
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: soc-backend
+    ports:
+      - "${SOC_API_PORT:-8000}:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - soc_data:/app
+    networks:
+      - soc-network
+    restart: unless-stopped
+    profiles: ["dashboard"]
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: soc-frontend
+    ports:
+      - "${SOC_UI_PORT:-5173}:80"
+    depends_on:
+      - backend
+    networks:
+      - soc-network
+    restart: unless-stopped
+    profiles: ["dashboard"]
+
+  detection-engine:
+    build:
+      context: ./detection-engine
+      dockerfile: Dockerfile
+    container_name: soc-detection-engine
+    ports:
+      - "${DETECTOR_PORT:-8003}:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - alert_data:/app
+    networks:
+      - soc-network
+    restart: unless-stopped
+    profiles: ["dashboard"]
+
+  explainer:
+    build:
+      context: ./explainer
+      dockerfile: Dockerfile
+    container_name: soc-explainer
+    ports:
+      - "${EXPLAINER_PORT:-8004}:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+    networks:
+      - soc-network
+    restart: unless-stopped
+    profiles: ["dashboard"]
